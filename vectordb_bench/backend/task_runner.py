@@ -127,19 +127,32 @@ class CaseRunner(BaseModel):
         """
         try:
             m = Metric()
-            if drop_old:
-                _, load_dur = self._load_train_data()
-                build_dur = self._optimize()
-                m.load_duration = round(load_dur+build_dur, 4)
-                log.info(
-                    f"Finish loading the entire dataset into VectorDB,"
-                    f" insert_duration={load_dur}, optimize_duration={build_dur}"
-                    f" load_duration(insert + optimize) = {m.load_duration}"
-                )
-
-            self._init_search_runner()
-            m.recall, m.serial_latency_p99 = self._serial_search()
-            m.qps = self._conc_search()
+            f_cnt = 0
+            d_cnt = 0
+            num_batch = 5
+            times = 4
+            for _ in range(times):
+                for data_df in self.ca.dataset:
+                    f_cnt = f_cnt + 1
+                    all_metadata = data_df['id'].tolist()
+                    d_cnt = d_cnt + len(all_metadata)
+                per_f_batch = f_cnt / num_batch
+                per_d_batch = d_cnt / num_batch
+                off_list = np.arange(0, f_cnt, per_f_batch)
+                log.info(f"run performance with data_size = {d_cnt}, frame_cnt = {f_cnt}, then per_data_batch = {per_d_batch} and per_frame_batch = {per_f_batch}")
+                for offset in off_list:
+                    if drop_old:
+                        _, load_dur = self._load_train_data(offset, per_d_batch)
+                        build_dur = self._optimize()
+                        m.load_duration = round(load_dur+build_dur, 4)
+                        log.info(
+                          f"Finish loading the entire dataset into VectorDB,"
+                          f"insert_duration={load_dur}, optimize_duration={build_dur}"
+                          f"load_duration(insert + optimize) = {m.load_duration}"
+                        )
+                    self._init_search_runner()
+                    m.recall, m.serial_latency_p99 = self._serial_search()
+                    m.qps = self._conc_search()
         except Exception as e:
             log.warning(f"Failed to run performance case, reason = {e}")
             traceback.print_exc()
@@ -149,10 +162,10 @@ class CaseRunner(BaseModel):
             return m
 
     @utils.time_it
-    def _load_train_data(self):
+    def _load_train_data(self, offset, batch_size):
         """Insert train data and get the insert_duration"""
         try:
-            runner = SerialInsertRunner(self.db, self.ca.dataset, self.normalize, self.ca.load_timeout)
+            runner = SerialInsertRunner(self.db, self.ca.dataset, self.normalize, self.ca.load_timeout, offset, batch_size)
             runner.run()
         except Exception as e:
             raise e from None

@@ -23,20 +23,25 @@ WAITTING_TIME = 60
 log = logging.getLogger(__name__)
 
 class SerialInsertRunner:
-    def __init__(self, db: api.VectorDB, dataset: DatasetManager, normalize: bool, timeout: float | None = None):
+    def __init__(self, db: api.VectorDB, dataset: DatasetManager, normalize: bool, timeout: float, frame_offset : int, limit : int | None = None ):
         self.timeout = timeout if isinstance(timeout, (int, float)) else None
         self.dataset = dataset
         self.db = db
         self.normalize = normalize
+        self.frame_offset = frame_offset
+        self.limit = limit
 
     def task(self) -> int:
         count = 0
         with self.db.init():
             log.info(f"({mp.current_process().name:16}) Start inserting embeddings in batch {config.NUM_PER_BATCH}")
             start = time.perf_counter()
+            frame_id = -1
             for data_df in self.dataset:
+                frame_id = frame_id + 1
+                if (frame_id < self.frame_offset):
+                    continue
                 all_metadata = data_df['id'].tolist()
-
                 emb_np = np.stack(data_df['emb'])
                 if self.normalize:
                     log.debug("normalize the 100k train data")
@@ -44,9 +49,9 @@ class SerialInsertRunner:
                 else:
                     all_embeddings = emb_np.tolist()
                 del(emb_np)
-                log.debug(f"batch dataset size: {len(all_embeddings)}, {len(all_metadata)}")
+                log.debug(f"batch  dataset size: {len(all_embeddings)}, {len(all_metadata)}")
 
-                last_batch = self.dataset.data.size - count == len(all_metadata)
+                last_batch =  count + len(all_metadata) >= self.limit
                 insert_count, error = self.db.insert_embeddings(
                     embeddings=all_embeddings,
                     metadata=all_metadata,
@@ -58,7 +63,9 @@ class SerialInsertRunner:
                 assert insert_count == len(all_metadata)
                 count += insert_count
                 if count % 100_000 == 0:
-                    log.info(f"({mp.current_process().name:16}) Loaded {count} embeddings into VectorDB")
+                    log.info(f"({mp.current_process().name:16}) Loading {count} embeddings into VectorDB")
+                if last_batch:
+                    break    
 
             log.info(f"({mp.current_process().name:16}) Finish loading all dataset into VectorDB, dur={time.perf_counter()-start}")
             return count
