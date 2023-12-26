@@ -32,8 +32,12 @@ class SerialInsertRunner:
     def task(self) -> int:
         count = 0
         with self.db.init():
-            log.info(f"({mp.current_process().name:16}) Start inserting embeddings in batch {config.NUM_PER_BATCH}")
-            start = time.perf_counter()
+          log.info(f"({mp.current_process().name:16}) Start inserting embeddings in batch {config.NUM_PER_BATCH}")
+          start = time.perf_counter()
+          times = 2
+          limit_count = 14000000
+          for cycles in range(times):
+            log.info(f"insert data cycle {cycles}")  
             for data_df in self.dataset:
                 all_metadata = data_df['id'].tolist()
 
@@ -46,7 +50,12 @@ class SerialInsertRunner:
                 del(emb_np)
                 log.debug(f"batch dataset size: {len(all_embeddings)}, {len(all_metadata)}")
 
-                last_batch = self.dataset.data.size - count == len(all_metadata)
+                last_batch = (self.dataset.data.size - count == len(all_metadata) and cycles == times - 1)
+                insert_batch = len(all_metadata)
+                
+                if count + insert_batch >= limit_count:
+                    last_batch = True
+            
                 insert_count, error = self.db.insert_embeddings(
                     embeddings=all_embeddings,
                     metadata=all_metadata,
@@ -59,9 +68,10 @@ class SerialInsertRunner:
                 count += insert_count
                 if count % 100_000 == 0:
                     log.info(f"({mp.current_process().name:16}) Loaded {count} embeddings into VectorDB")
-
-            log.info(f"({mp.current_process().name:16}) Finish loading all dataset into VectorDB, dur={time.perf_counter()-start}")
-            return count
+                if last_batch:
+                   break      
+        log.info(f"({mp.current_process().name:16}) Finish loading all dataset into VectorDB, dur={time.perf_counter()-start}")
+        return count
 
     def endless_insert_data(self, all_embeddings, all_metadata, left_id: int = 0) -> int:
         with self.db.init():
